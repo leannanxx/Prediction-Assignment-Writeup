@@ -1,0 +1,199 @@
+---
+title: "Prediction Assignment Writeup"
+author: "Julia Maier"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+### Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. 
+One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, our goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: 
+[http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har](web.archive.org) (see the section on the Weight Lifting Exercise Dataset).
+
+**Reference**: 
+
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+
+
+### Goal of this project
+
+The goal of this project is to predict the manner in which participants did the predefined exercise. This is the "classe" variable in the training set. 
+You may use any of the other variables to predict with. You should create a report describing how you built your model, how you used cross validation, what you think the expected out of sample error is, and why you made the choices you did. You will also use your prediction model to predict 20 different test cases.
+
+
+```{r libraries, echo=FALSE, message=FALSE, warning=FALSE}
+
+library(tidyverse)
+library(readr)
+library(caret)
+library(randomForest)
+library(gbm)
+
+```
+
+### Preparation of dataset
+
+In a first step, data are loaded from the website. They are then processed to create clean datasets.
+
+```{r datasets, message=FALSE, warning=FALSE}
+
+# Create datasets
+
+## Download and save datasets
+
+url_train <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+url_test  <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+if(!file.exists("pml-training.csv"))  {
+  download.file(url_train, "pml-training.csv", method = "curl")
+}
+
+if(!file.exists("pml-testing.csv"))  {
+  download.file(url_test, "pml-testing.csv", method = "curl")
+}
+ 
+
+## Load TRAINING DATA   
+
+# 1) Read training data
+raw <- readLines("pml-training.csv", warn = FALSE)
+
+# 2) Remove Backslash-escaped quotes (\"), and all " Signs
+    raw <- gsub('\\\\\"', '', raw, perl = TRUE)
+    clean <- gsub('"', '', raw, fixed = TRUE) 
+
+# 3) Save clean data set
+    writeLines(clean, "pml-training_noquotes.csv", useBytes = TRUE)
+    
+    data_train <- read.csv("pml-training_noquotes.csv", na.strings = c("NA", "#DIV/0!", ""), stringsAsFactors = FALSE)
+
+    
+## Load TEST DATA
+
+# 1) Read testing data
+raw <- readLines("pml-testing.csv", warn = FALSE)
+
+# 2) Remove Backslash-escaped quotes (\"), and all " Signs
+    raw <- gsub('\\\\\"', '', raw, perl = TRUE)
+    clean <- gsub('"', '', raw, fixed = TRUE)   
+
+# 3) Save clean data set
+    writeLines(clean, "pml-testing_noquotes.csv", useBytes = TRUE)
+    
+    data_test <- read.csv("pml-testing_noquotes.csv", na.strings = c("NA", "#DIV/0!", ""), stringsAsFactors = FALSE)
+
+dim(data_train)
+dim(data_test)
+
+
+ ## Remove NA > 95%
+ 
+  na_thresh <- 0.95
+  valid_cols <- colMeans(is.na(data_train)) < na_thresh
+  data_train <- data_train[, valid_cols]
+
+ ## Remove irrelevant variables
+  drop_cols <- c("X", "user_name", "cvtd_timestamp", "raw_timestamp_part_1", "raw_timestamp_part_2", "new_window", "num_window")
+
+  data_train <- data_train[, !(names(data_train) %in% drop_cols)]
+  
+  
+ ## Define Factor
+  
+  data_train$classe <- factor(data_train$classe)
+  
+  
+ ## Data overview
+  
+  str(data_test)
+  str(data_train)
+
+```
+
+<br>
+## Gradient Boosting Model
+
+As a first step, a Gradient Boosting Model was built and trained. 
+
+
+```{r gbm}
+
+set.seed(123)
+
+ctrl <- trainControl(method = "cv", number = 3)
+
+gbm_cv <- train(
+  classe ~ .,
+  data = data_train,
+  method = "gbm",
+  trControl = ctrl,
+  verbose = FALSE
+)
+
+gbm_cv
+
+```
+
+THe model has been cross-validated using 3 fold cross-validation. The resulting accuracy was .961 with Kappa = .950. 
+
+
+<br>
+
+### Random Forest Model
+
+In a second step, a Random Forest Model is trained. It is then tested in the test data set.  
+
+
+```{r random forest}
+
+set.seed(1122)
+
+## Cross-validation
+
+  ctrl <- trainControl(method = "cv",
+                     number = 5, 
+                     verboseIter = TRUE,
+                     allowParallel = TRUE)
+  
+  rf_cv <- train(classe ~ .,
+                 data = data_train,
+                 method = "rf",
+                 trControl =  trainControl(method = "cv", number = 3))
+
+  rf_cv
+
+```
+
+The model has been cross-validated using 3 fold cross-validation. The resulting accuracy was .993 (N = 13081) with Kappa = .991.
+
+
+``` {r test set}
+
+# Select variables
+test_use <- data_test[, names(data_train)[names(data_train) != "classe"]]
+
+
+# use test data set
+
+rf_pred1 <- predict(gbm_cv, test_use)
+rf_pred1
+
+rf_pred2 <- predict(rf_cv, test_use)
+rf_pred2
+
+```
+## Comparison of models
+  
+In a last step, both models are compared as regards their prediction accuracy.
+
+
+``` {r comparison}
+
+results <- resamples(list(RandomForest = rf_cv, GBM = gbm_cv))
+summary(results)
+bwplot(results, main = "Model Comparison (CV)")
+  
+```
+
+Considering the direct comparison of both models, Random Forest allows for a better prediction than Gradient Boosting.
